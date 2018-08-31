@@ -8,12 +8,16 @@ reduce_model_dimensionality <- function(model, coupling, flux){
   
   remove_reactions <- c()
   
-  for (set in coupling){
-    rxn_idxs <- vapply(set, function(x){get_set_idx(x)}, c(1))
+  for (i in 1:length(coupling)){
+    set <- coupling[[i]]
+    if (length(set) == 1){next}
+    rxn_idxs <- vapply(set, function(x){get_rxn_idx(model, x)}, c(1))
     # calculate reduced reaction
-    rxn_fluxes <- calculate_reaction_fluxes
+    rxn_ratios <- calculate_reaction_ratios(rxn_idxs, flux)
     # add reaction to model
-    model <- calculate_reduced_reaction
+    new_react_name <- paste("r_set_", i, sep = "")
+    print(new_react_name)
+    model <- calculate_reduced_reaction(model, rxn_idxs, rxn_ratios, new_react_name)
     # mark old reactions to be removed
     remove_reactions <- c(remove_reactions, rxn_idxs)
   }
@@ -25,25 +29,34 @@ reduce_model_dimensionality <- function(model, coupling, flux){
 
 calculate_reaction_ratios <- function(rxn_idxs, flux){
   flux <- flux[,rxn_idxs]
+  flux <- flux[which(flux[,1] != 0),]
   flux <- flux/flux[,1]
   
   for (i in 1:ncol(flux)){
-    if (!all.equal(flux[,i])){print('inconsistent')}
+    if (length(unique(flux[,i])) != 1){print('inconsistent'); print(rxn_idxs[i])}
   }
   
   return(flux[1,])
 }
 
-calculate_reduced_reactions <- function(rxn_idxs, ratios, react_id){
+calculate_reduced_reaction <- function(model, rxn_idxs, ratios, react_id){
   S <- model@S
   
-  rxns_S <- S[rxn_idxs,]*ratios
-  new_react <- colSums(rxns_S)
+  rxns_S <- S[,rxn_idxs]*ratios
+  new_react <- rowSums(rxns_S)
   
-  mets <- model@mets[which(new_react != 0)]
-  coeffs <- new_react[which(new_react != 0)]
+  met_idxs <- which(new_react != 0)
+  mets <- model@met_id[met_idxs]
+  coeffs <- new_react[met_idxs]
   
-  model <- addReact(model, id = react_id, met = mets, Scoef = coeffs, reversible = any(model@rev[rxn_idxs]), lb = -1000, ub = 1000)
+  print(paste(length(mets), length(coeffs)))
+  print(paste(length(model@met_id), length(new_react)))
+  
+  rev <- any(model@react_rev[rxn_idxs])
+  lb <- 0
+  if (rev){lb <- -1000}
+  
+  model <- addReact(model = model, id = react_id, met = model@met_id, Scoef = new_react, reversible = rev, lb = lb, ub = 1000)
   
   return(model)
 }
