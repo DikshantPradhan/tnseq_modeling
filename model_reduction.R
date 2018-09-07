@@ -7,6 +7,7 @@
 reduce_model_dimensionality <- function(model, coupling, flux){
   
   remove_reactions <- c()
+  pathway_ratios <- c()
   
   for (i in 1:length(coupling)){
     set <- coupling[[i]]
@@ -15,16 +16,17 @@ reduce_model_dimensionality <- function(model, coupling, flux){
     # calculate reduced reaction
     rxn_ratios <- calculate_reaction_ratios(rxn_idxs, flux)
     # add reaction to model
-    new_react_name <- paste("r_set_", i, sep = "")
-    print(new_react_name)
+    new_react_name <- paste("pathway_", i, sep = "")
     model <- calculate_reduced_reaction(model, rxn_idxs, rxn_ratios, new_react_name)
     # mark old reactions to be removed
     remove_reactions <- c(remove_reactions, rxn_idxs)
+    pathway_ratios[i] <- list(rxn_ratios)
   }
   
   model <- rmReact(model = model, react = remove_reactions, rm_met = FALSE)
   
-  return(model)
+  
+  list(model = model, pathway_ratios = pathway_ratios)
 }
 
 calculate_reaction_ratios <- function(rxn_idxs, flux){
@@ -56,7 +58,58 @@ calculate_reduced_reaction <- function(model, rxn_idxs, ratios, react_id){
   lb <- 0
   if (rev){lb <- -1000}
   
-  model <- addReact(model = model, id = react_id, met = model@met_id, Scoef = new_react, reversible = rev, lb = lb, ub = 1000)
+  model <- addReact(model = model, id = react_id, met = model@met_id, Scoef = new_react, reversible = rev, lb = lb, ub = 1000,
+                    gprAssoc = concatenate_gprs(rxn_idxs, model@gpr))
   
   return(model)
+}
+
+concatenate_gprs <- function(idxs, gpr){
+  gprs <- c()
+  for (i in idxs){
+    new_gpr <- gpr[i]
+    if (nchar(new_gpr) == 0){next}
+    if (grepl('or', new_gpr)){
+      new_gpr <- paste('(', new_gpr, ')', sep = '')
+    }
+    gprs <- c(gprs, new_gpr)
+  }
+  
+  new_gprs <- paste(gprs, collapse = ' and ')
+  return(new_gprs)
+}
+
+
+extrapolate_from_reduced_flux <- function(flux, sets, ratios, react_id_split = 'pathway_'){
+  if ((nrow(flux) != length(sets)) & (length(sets) != length(ratios))){
+    print('error in data')
+    return()
+  }
+  
+  extrapolate_rxn_flux <- function(set, ratio, flux){
+    # convert ratio to matrix and multiply by flux
+    output_flux <- matrix(data = ratio, nrow = length(ratio), ncol = 1)*flux
+    rownames(output_flux) <- set
+    return(output_flux)
+  }
+  
+  rxns <- unlist(sets)
+  output_flux <- matrix(data = 0, nrow = length(rxns), ncol = 1)
+  rownames(output_flux) <- rxns
+  
+  pathway_names <- names(flux)
+  for (i in 1:length(flux)){
+    if (grepl(react_id_split) %in% pathway_names[i]){ # reduced pathway
+      set <- sets[[strsplit(pathway_names[i], split = react_id_split)[[1]][2]]]
+      new_flux <- extrapolate_rxn_flux(set, ratio[[i]], flux[i])
+      
+      for (j in 1:nrow(new_flux)){
+        output_flux[rownames(new_flux)[j]] <- new_flux[j,1]
+      }
+      
+    }
+    else { # single reaction
+      output_flux[pathway_names[i]] <- flux[i]
+    }
+  }
 }
