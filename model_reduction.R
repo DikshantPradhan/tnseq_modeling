@@ -54,11 +54,13 @@ calculate_reduced_reaction <- function(model, rxn_idxs, ratios, react_id){
   print(paste(length(mets), length(coeffs)))
   print(paste(length(model@met_id), length(new_react)))
   
-  rev <- any(model@react_rev[rxn_idxs])
-  lb <- 0
-  if (rev){lb <- -1000}
+  # rev <- any(model@react_rev[rxn_idxs])
+  lbs <- model@lowbnd[rxn_idxs]*ratios
+  lb <- max(lbs)
+  ubs <- model@uppbnd[rxn_idxs]*ratios
+  ub <- min(ubs)
   
-  model <- addReact(model = model, id = react_id, met = model@met_id, Scoef = new_react, reversible = rev, lb = lb, ub = 1000,
+  model <- addReact(model = model, id = react_id, met = model@met_id, Scoef = new_react, lb = lb, ub = ub,
                     gprAssoc = concatenate_gprs(rxn_idxs, model@gpr))
   
   return(model)
@@ -79,7 +81,12 @@ concatenate_gprs <- function(idxs, gpr){
   return(new_gprs)
 }
 
-
+#' Calculate the fluxes of the reactions in the original model based on fluxes in the reduced model
+#' @param flux vector of flux values from reduced model
+#' @param sets sets of reactions which were used to reduce the original model
+#' @param ratios flux ratios of reactions in each set
+#' @param react_id_split string used in naming the reduced pathways which will be used to identify the associated sets
+#' @return vector of fluxes for each of the original, un-reduced reactions
 extrapolate_from_reduced_flux <- function(flux, sets, ratios, react_id_split = 'pathway_'){
   if ((nrow(flux) != length(sets)) & (length(sets) != length(ratios))){
     print('error in data')
@@ -112,4 +119,33 @@ extrapolate_from_reduced_flux <- function(flux, sets, ratios, react_id_split = '
       output_flux[pathway_names[i]] <- flux[i]
     }
   }
+}
+
+#' Calculate the fluxes of the reactions in the reduced model based on fluxes in the original model
+#' @param flux vector of flux values from reduced model
+#' @param sets sets of reactions which were used to reduce the original model
+#' @param ratios flux ratios of reactions in each set
+#' @param react_id_split string used in naming the reduced pathways which will be used to identify the associated sets
+#' @return vector of fluxes for each of the original, un-reduced reactions
+extrapolate_from_reduced_flux <- function(flux, sets, ratios = NULL, react_id_split = 'pathway_'){
+  
+  output_flux <- matrix(data = 0, nrow = length(sets), ncol = 1)
+  path_names <- c()
+  # rownames(output_flux) <- 
+  
+  for (i in 1:length(sets)){
+    rxn <- sets[[i]][1]
+    
+    if (length(sets[[i]]) == 1){
+      path_names <- c(path_names, rxn)
+    }
+    else {
+      path_names <- c(path_names, paste(react_id_split, i, sep = ''))
+    }
+    
+    output_flux[i] <- flux[rxn]
+  }
+  
+  rownames(output_flux) <- path_names
+  return(output_flux)
 }
