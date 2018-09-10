@@ -17,6 +17,7 @@ reduce_model_dimensionality <- function(model, coupling, flux){
     rxn_ratios <- calculate_reaction_ratios(rxn_idxs, flux)
     # add reaction to model
     new_react_name <- paste("pathway_", i, sep = "")
+    print(i); print(rxn_ratios)
     model <- calculate_reduced_reaction(model, rxn_idxs, rxn_ratios, new_react_name)
     # mark old reactions to be removed
     remove_reactions <- c(remove_reactions, rxn_idxs)
@@ -35,7 +36,7 @@ calculate_reaction_ratios <- function(rxn_idxs, flux){
   flux <- flux/flux[,1]
   
   for (i in 1:ncol(flux)){
-    if (length(unique(flux[,i])) != 1){print('inconsistent'); print(rxn_idxs[i])}
+    # if (length(unique(as.vector(flux[,i]))) > 1){print('inconsistent'); print(rxn_idxs[i])}
   }
   
   return(flux[1,])
@@ -44,15 +45,20 @@ calculate_reaction_ratios <- function(rxn_idxs, flux){
 calculate_reduced_reaction <- function(model, rxn_idxs, ratios, react_id){
   S <- model@S
   
-  rxns_S <- S[,rxn_idxs]*ratios
+  rxns_S <- S[,rxn_idxs]
+  
+  for (i in 1:length(ratios)){
+    rxns_S[,i] <- rxns_S[,i]*ratios[i]
+  }
+  
   new_react <- rowSums(rxns_S)
   
   met_idxs <- which(new_react != 0)
   mets <- model@met_id[met_idxs]
   coeffs <- new_react[met_idxs]
   
-  print(paste(length(mets), length(coeffs)))
-  print(paste(length(model@met_id), length(new_react)))
+  # print(paste(length(mets), length(coeffs)))
+  # print(paste(length(model@met_id), length(new_react)))
   
   # rev <- any(model@react_rev[rxn_idxs])
   lbs <- model@lowbnd[rxn_idxs]*ratios
