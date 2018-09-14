@@ -90,20 +90,25 @@ color_binning <- function(x, n_bins){
   return(colors)
 }
 
-sample_diff <- function(wt_samples, ko_samples, sample_dim = 2){
+sample_diff <- function(wt_samples, ko_samples, sample_dim = 2, plot = TRUE){
   wt_mean <- apply(wt_samples, sample_dim, mean)
   wt_sd <- apply(wt_samples, sample_dim, sd)
   ko_mean <- apply(ko_samples, sample_dim, mean)
   ko_sd <- apply(ko_samples, sample_dim, sd)
   
   names <- colnames(wt_samples)
-  d_mean <- (ko_mean - wt_mean)
+  d_mean <- (ko_mean - wt_mean)/(wt_mean+0.01)
   d_sd <- (ko_sd - wt_sd)
   
   sd_colors <- color_binning(d_sd, n_bins = 10)
   
   ko_change <- data.frame(names = names, d_mean = d_mean, d_sd = d_sd, sd_col = sd_colors)
-  
+  # ggplot(data=ko_change, aes(x = names, y=d_mean)) +
+  #   geom_bar(stat="identity", fill = sd_colors) #+ scale_color_manual(values=sd_colors) + theme_minimal()
+  return(ko_change)
+}
+
+plot_sample_diff <- function(ko_change){
   ggplot(data=ko_change, aes(x = names, y=d_mean)) +
-    geom_bar(stat="identity", fill = sd_colors) #+ scale_color_manual(values=sd_colors) + theme_minimal()
+    geom_bar(stat="identity", fill = ko_change$sd_col) #+ scale_color_manual(values=sd_colors) + theme_minimal()
 }
