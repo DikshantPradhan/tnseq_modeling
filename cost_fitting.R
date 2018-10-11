@@ -1,6 +1,6 @@
-library(sybil)
-source('~/GitHub/tnseq_modeling/falcon_tools.R')
-source('~/GitHub/tnseq_modeling/sampling_tools.R')
+# library(sybil)
+# source('~/GitHub/tnseq_modeling/falcon_tools.R')
+# source('~/GitHub/tnseq_modeling/sampling_tools.R')
 library(gurobi)
 
 # wt_sample_file <- "~/Documents/jensn lab/tnseq fitting/sampling_data/ko_0_samples.csv"
@@ -53,7 +53,7 @@ generate_moma_model <- function(model, wt_fluxes, idxs, weights){
   
   for (i in 1:length(idxs)){
     idx <- idxs[i]
-    weight <- weights[i]
+    weight <- weights[i] # consider this!
     wt_flux <- wt_fluxes[idx]
     
     q_mtx[idx,idx] <- weight
@@ -82,10 +82,13 @@ moma_optimization_wrapper <- function(model, wt_fluxes, idxs, weights, obj_idx){
   return(ko_fitness)
 }
 
+fitness_diff <- function(fit_pred, fit_obs){
+  return(sum((fit_pred - fit_obs)^2))
+}
+
 fitness_optimization <- function(model, wt_fluxes, idxs, weights, obj_idx, fit_obs){
-  fit_pred <- moma_optimization_wrapper(model, wt_fluxes, gene_idxs, sample_weights, obj_idx)
-  ss <- sum((fit_pred - fit_obs)^2)
-  return(ss)
+  fit_pred <- moma_optimization_wrapper(model, wt_fluxes, idxs, weights, obj_idx)
+  return(fitness_diff(fit_pred, fit_obs))
 }
 
 # make wt model 
@@ -109,8 +112,8 @@ wt_fluxes <- results$x
 sample_weights <- sample((1:10)/10, length(gene_idxs), replace = TRUE)
 
 # run all KOs
-
 ko_fitness <- moma_optimization_wrapper(model, wt_fluxes, gene_idxs, sample_weights, biom_idx)
+# fitness_diff(ko_fitness_2, ko_fitness)
 
 # moma_model <- generate_moma_model(model, wt_fluxes, gene_idxs, sample_weights)
 # ko_fitness <- matrix(data = 0, nrow = 1, ncol = length(gene_idxs))
@@ -125,4 +128,9 @@ ko_fitness <- moma_optimization_wrapper(model, wt_fluxes, gene_idxs, sample_weig
 
 # optimize 
 
-result <- optim(par = rep(1, length(gene_idxs)), fitness_optimization, model = moma_model, wt_fluxes = wt_fluxes, idxs = gene_idxs, fit_obs = ko_fitness)
+result <- optim(par = rep(0.5, length(gene_idxs)), fitness_optimization, model = model, wt_fluxes = wt_fluxes, idxs = gene_idxs, fit_obs = ko_fitness)
+sink(file = 'output.txt')
+print(sample_weights)
+print('output:')
+print(result)
+sink()
