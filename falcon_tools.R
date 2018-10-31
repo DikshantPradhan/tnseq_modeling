@@ -1,5 +1,5 @@
-# library(pryr)
-# library(data.tree)
+library(pryr)
+library(data.tree)
 
 #' Generate FALCON model from base metabolic Sybil model
 #' @param model original Sybil model for organism metabolism
@@ -9,7 +9,7 @@
 #' @seealso 
 #' @export
 #' @examples
-generate_falcon_model <- function(model, gene_sets = c(), rxn_sets = c()){
+generate_falcon_model <- function(model, gene_sets = c(), rxn_sets = c(), kcat_data = NULL, enzyme_constraint = FALSE){
   # gprRules <- model@gprRules
   # genes <- model@genes
   og_dim <- dim(model@S)
@@ -20,17 +20,17 @@ generate_falcon_model <- function(model, gene_sets = c(), rxn_sets = c()){
   rxnGeneMat <- model@rxnGeneMat
   colnames(rxnGeneMat) <- model@allGenes
   rownames(rxnGeneMat) <- model@react_id
-
+  
   gene_set_bool <- FALSE
   if ((length(gene_sets) > 0) & (length(rxn_sets) > 0)){
     gene_set_bool <- TRUE
   }
-
+  
   marked_genes <- matrix(FALSE, nrow = length(og_allGenes), ncol = 1)
   marked_rxns <- matrix(FALSE, nrow = length(og_react_id), ncol = 1)
   rownames(marked_genes) <- model@allGenes
   rownames(marked_rxns) <- model@react_id
-
+  
   # clean gene sets, if passed in
   if (gene_set_bool){
     for (i in 1:length(gene_sets)){
@@ -41,33 +41,40 @@ generate_falcon_model <- function(model, gene_sets = c(), rxn_sets = c()){
       }
     }
   }
-
+  
   # add all exchange reactions
   for (gene in og_allGenes){
     new_met <- paste('a', gene, sep = '_')
     model <- addExchReact(model, met = new_met, lb = -1000, ub = 1000) # may need to alter this for grb
   }
-
+  
   genes_from_path <- function(path, rxn_idx){
     gene_idxs <- gprRule_to_idx(path)
     genes <- og_genes[rxn_idx]
     return(genes[[1]][gene_idxs])
   }
-
+  
   # helper function for simple_add and or_add
   normal_add <- function(model, new_met_list, rxn_id, simple = FALSE, addExch = FALSE, identifier = NULL){
-
+    
+    kcat <- 1
+    if (!is.null(kcat_data)){
+      if (rxn_id %in% kcat_data$rxn){
+        kcat <- kcat_from_rxn(kcat_data, rxn_id)
+      }
+    }
+    
     rxn_idx <- which(model@react_id == rxn_id)
     exch <- findExchReact(model)
-
+    
     # metabolites of existing reaction
     old_met_idxs <- which(model@S[(1:og_dim[1]), rxn_idx] != 0)
     old_met_list <- og_met_id[old_met_idxs]
     old_met_coeff <- model@S[old_met_idxs, rxn_idx]
-
+    
     met_list <- c(unlist(old_met_list), unlist(new_met_list))
     met_list <- met_list[!is.na(met_list)]
-
+    
     if (!simple){ # add reverse reaction if needed # change from 0 -> 1000 & -1000 -> 0
       lowbnd <- model@lowbnd[rxn_idx]
       uppbnd <- model@uppbnd[rxn_idx]
@@ -75,31 +82,41 @@ generate_falcon_model <- function(model, gene_sets = c(), rxn_sets = c()){
                         Scoef = c(old_met_coeff, rep(-1, length(new_met_list))), lb = 0, ub = uppbnd, reversible = FALSE)
       model <- addReact(model, paste(rxn_id, identifier, 'rev', sep = '_'), met = met_list,
                         Scoef = c(old_met_coeff, rep(1, length(new_met_list))), lb = lowbnd, ub = 0, reversible = FALSE)
-
+      
       ## NEED CONSTRAINTS TO PREVENT MODEL FROM PUSHING FLUX THROUGH BOTH DIRECTIONS AT ONCE
     }
     else { # changed from [-1000 to 1000] to [lowbnd to uppbnd]
       lowbnd <- model@lowbnd[rxn_idx]
       uppbnd <- model@uppbnd[rxn_idx]
       model <- addReact(model, rxn_id, met = met_list,
-                        Scoef = c(old_met_coeff, rep(-1, length(new_met_list))), lb = lowbnd, ub = uppbnd, reversible = TRUE)
+                        Scoef = c(old_met_coeff, rep(-1/kcat, length(new_met_list))), lb = lowbnd, ub = uppbnd, reversible = TRUE)
     }
-
+    
     return(model)
   }
-
+  
   # used for direct addition of gene/enzyme to reaction; not used when reaction_activity is needed (or case)
   simple_add <- function(model, new_met_list, rxn_id, simple = TRUE){
     # print(c(rxn_id, ":", new_met_list))
-    model <- normal_add(model, new_met_list, rxn_id, simple = TRUE)
+    # rxn_idx <- which(og_react_id == rxn_id)
+    rxn_activity <- paste('a', rxn_id, sep = "_")
+    
+    met_list <- c(unlist(new_met_list), rxn_activity) # genes first, then reaction_activity
+    met_list <- met_list[!is.na(met_list)] # need to get rid of this
+    coeff_list <- c(unlist(rep(-1, length(new_met_list))), 1)
+    
+    # model <- normal_add(model, new_met_list, rxn_id, simple = TRUE)
+    model <- addReact(model, paste(rxn_activity, 'conversion', sep = ' '), met = met_list,
+                      Scoef = coeff_list, lb = -1000, ub = 1000, reversible = TRUE)
+    model <- normal_add(model, new_met_list = c(rxn_activity), rxn_id, simple = simple, addExch = FALSE)
     return(model)
   }
-
+  
   # used for multiple gene combinations; reaction_activity needed
   or_add <- function(model, path_list, rxn_id, simple = TRUE, split = TRUE){
     rxn_idx <- which(og_react_id == rxn_id)
     rxn_activity <- paste('a', rxn_id, sep = "_")
-
+    
     # add conversion for path to react_activity
     identifier <- 1 # need to differentiate breakdown of rxn in name
     for (mets in path_list){ # CHECK THIS FUNCTION IF EVERYTHING BREAKS
@@ -120,13 +137,14 @@ generate_falcon_model <- function(model, gene_sets = c(), rxn_sets = c()){
       }
       identifier <- identifier + 1
     }
-
+    
     # add activity specific to react
-    model <- normal_add(model, new_met_list = c(rxn_activity), rxn_id, simple = simple, addExch = FALSE)
-
+    # search through database for kcat
+    model <- normal_add(model, new_met_list = c(rxn_activity), rxn_id, simple = simple, addExch = FALSE) ## add kcat through here
+    
     return(model)
   }
-
+  
   # list of all rxns w which a gene participates
   gene_rxn_recurrence <- c()
   for (i in 1:length(model@allGenes)){
@@ -134,9 +152,9 @@ generate_falcon_model <- function(model, gene_sets = c(), rxn_sets = c()){
   }
   names(gene_rxn_recurrence) <- model@allGenes
   gene_rxn_promiscuity <- sapply(gene_rxn_recurrence, function(x) length(x))
-
+  
   # loyal genes and reactions
-
+  
   rxn_exclusive_genes <- which(gene_rxn_promiscuity == 1)
   loyal_rxns <- c()
   for (i in gene_rxn_recurrence[rxn_exclusive_genes]){
@@ -145,7 +163,7 @@ generate_falcon_model <- function(model, gene_sets = c(), rxn_sets = c()){
     }
   }
   loyal_rxn_idxs <- unique(loyal_rxns)
-
+  
   # all reactions which are comprised of non-promiscuous genes
   for (i in loyal_rxn_idxs){
     rxn_id <- og_react_id[i]
@@ -169,73 +187,82 @@ generate_falcon_model <- function(model, gene_sets = c(), rxn_sets = c()){
       marked_rxns[i] <- TRUE
     }
   }
-
+  
   remaining_genes <- model@allGenes[-c(which(marked_genes == TRUE))]
   remaining_rxns <- og_react_id[-c(which(marked_rxns == TRUE))]
-
+  
   # IF NO GENE SET INFORMATION, THEN SKIP THIS
   if (gene_set_bool){
-  # list of gene sets in which gene participates (idxs same as rxn sets)
-  gene_set_recurrence <- c()
-  for (i in 1:length(model@allGenes)){
-    recur <- c()
-    for (j in 1:length(gene_sets)){
-      if (model@allGenes[i] %in% gene_sets[[j]]){
-        recur <- c(recur, j)
+    # list of gene sets in which gene participates (idxs same as rxn sets)
+    gene_set_recurrence <- c()
+    for (i in 1:length(model@allGenes)){
+      recur <- c()
+      for (j in 1:length(gene_sets)){
+        if (model@allGenes[i] %in% gene_sets[[j]]){
+          recur <- c(recur, j)
+        }
+      }
+      gene_set_recurrence[i] <- list(recur)
+    }
+    names(gene_set_recurrence) <- model@allGenes
+    
+    gene_set_promiscuity <- sapply(gene_set_recurrence, function(x) length(x))
+    set_exclusive_genes <- which(gene_set_promiscuity == 1)
+    loyal_sets <- c()
+    for (i in gene_set_recurrence[set_exclusive_genes]){
+      # if (marked_genes[i]){next}
+      if (all(sapply(gene_sets[[i]], function(x) x %in% names(set_exclusive_genes)))){
+        loyal_sets <- c(loyal_sets, i)
       }
     }
-    gene_set_recurrence[i] <- list(recur)
-  }
-  names(gene_set_recurrence) <- model@allGenes
-
-  gene_set_promiscuity <- sapply(gene_set_recurrence, function(x) length(x))
-  set_exclusive_genes <- which(gene_set_promiscuity == 1)
-  loyal_sets <- c()
-  for (i in gene_set_recurrence[set_exclusive_genes]){
-    # if (marked_genes[i]){next}
-    if (all(sapply(gene_sets[[i]], function(x) x %in% names(set_exclusive_genes)))){
-      loyal_sets <- c(loyal_sets, i)
+    loyal_set_idxs <- unique(loyal_sets)
+    
+    for (i in loyal_set_idxs){
+      for (j in rxn_sets[[i]]){
+        rxn_idx <- which(model@react_id == j)
+        gpr_rule <- model@gprRules[rxn_idx]
+        gpr_paths <- find_gpr_paths(gpr_rule)
+        genes <- c()
+        for (path in gpr_paths){
+          genes <- c(genes, genes_from_path(path, rxn_idx))
+        }
+        genes <- unlist(genes)
+        if (which(og_react_id == j) %in% which(marked_rxns)){
+          next
+        }
+        if (nchar(gpr_paths[1]) == 0){
+          next
+        }
+        model <- or_add(model, gpr_paths, j)
+        marked_rxns[rxn_idx] <- TRUE
+        marked_genes[which(model@allGenes %in% genes)] <- TRUE
+      }
     }
+    
   }
-  loyal_set_idxs <- unique(loyal_sets)
-
-  for (i in loyal_set_idxs){
-    for (j in rxn_sets[[i]]){
-      rxn_idx <- which(model@react_id == j)
-      gpr_rule <- model@gprRules[rxn_idx]
-      gpr_paths <- find_gpr_paths(gpr_rule)
-      genes <- c()
-      for (path in gpr_paths){
-        genes <- c(genes, genes_from_path(path, rxn_idx))
-      }
-      genes <- unlist(genes)
-      if (which(og_react_id == j) %in% which(marked_rxns)){
-        next
-      }
-      if (nchar(gpr_paths[1]) == 0){
-        next
-      }
-      model <- or_add(model, gpr_paths, j)
-      marked_rxns[rxn_idx] <- TRUE
-      marked_genes[which(model@allGenes %in% genes)] <- TRUE
-    }
-  }
-
-  }
-
+  
   # NORMAL ADD FOR ALL REMAINING REACTIONS
-
+  
   for (rxn_idx in which(marked_rxns == FALSE)){
     rxn_id <- og_react_id[rxn_idx]
     gpr_rule <- model@gprRules[rxn_idx]
     gpr_paths <- find_gpr_paths(gpr_rule)
     if (nchar(gpr_paths[1]) == 0){next}
-
+    
     model <- or_add(model, gpr_paths, rxn_id, split = TRUE)
-
+    
     marked_rxns[rxn_idx] <- TRUE
   }
-
+  
+  if (enzyme_constraint){
+    exch_rxn <- findExchReact(model)
+    enzyme_exch <- grep('Ex_a_', exch_rxn@react_id)
+    enzyme_exch <- exch_rxn@react_pos[enzyme_exch]
+    model <- addExchReact(model, 'a_enzyme', -1000, 1000)
+    enzyme_idx <- grep('a_enzyme', model@met_id)
+    model@S[enzyme_idx, enzyme_exch] <- 1
+  }
+  
   return(model)
 }
 
@@ -243,7 +270,7 @@ gprRule_to_idx <- function(list){
   for (i in 1:length(list)){
     list[i] <- gsub("[^0-9]", "", list[i])
   }
-
+  
   return(as.numeric(list))
 }
 
@@ -254,14 +281,14 @@ gprRule_to_idx <- function(list){
 #' @export
 #' @examples
 clean_rxn_names_in_set <- function(set_list){
-
+  
   clean_ex_a <- function(name){
     new_name <- strsplit(name, 'Ex_a_')[[1]]
     return(new_name[2])
   }
   
   new_sets <- c()
-
+  
   for (i in 1:length(set_list)){
     k <- 1
     new_set <- c()
@@ -281,7 +308,7 @@ clean_rxn_names_in_set <- function(set_list){
       new_sets[i] <- list(new_set)
     }
   }
-
+  
   return(new_sets)
 }
 
@@ -294,9 +321,9 @@ clean_rxn_names_in_set <- function(set_list){
 isolate_gene_matrix <- function(coupling_matrix){
   row_genes <- which(grepl('Ex_a', rownames(coupling_matrix)))
   col_genes <- which(grepl('Ex_a', colnames(coupling_matrix)))
-
+  
   gene_matrix <- coupling_matrix[row_genes, col_genes]
-
+  
   return(gene_matrix)
 }
 
@@ -309,9 +336,9 @@ isolate_gene_matrix <- function(coupling_matrix){
 isolate_rxn_matrix <- function(coupling_matrix){
   row_rxns <- which(!grepl('a_', rownames(coupling_matrix)))
   col_rxns <- which(!grepl('a_', colnames(coupling_matrix)))
-
+  
   rxn_matrix <- coupling_matrix[row_rxns, col_rxns]
-
+  
   return(rxn_matrix)
 }
 
@@ -399,7 +426,7 @@ tree_building <- function(list, index){
     id2 <- chars[length(chars)]
   }
   index1 <- start_1
-
+  
   while (!(id1 %in% c( '|', '&', 'x'))){
     index1 <- index1 + 1
     chars <- strsplit(list[index1], "")[[1]]
